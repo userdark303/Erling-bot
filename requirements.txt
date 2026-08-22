@@ -1,1 +1,1 @@
-python-telegram-bot[job-queue]>=22,<23
+python-telegram-bot[webhooks,job-queue]>=22,<23
