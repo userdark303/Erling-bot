@@ -14,18 +14,54 @@ from telegram.ext import (
     filters,
 )
 
+# =========================================================
+# SETTINGS
+# =========================================================
+
 TOKEN = os.environ["BOT_TOKEN"]
-CHANNEL = os.getenv("CHANNEL_USERNAME", "@AnimeArmyChan")
-DELETE_AFTER = int(os.getenv("DELETE_AFTER_SECONDS", "20"))
-PORT = int(os.getenv("PORT", "8000"))
+
+CHANNEL = os.getenv(
+    "CHANNEL_USERNAME",
+    "@AnimeArmyChan"
+)
+
+DELETE_AFTER = int(
+    os.getenv(
+        "DELETE_AFTER_SECONDS",
+        "20"
+    )
+)
+
+PORT = int(
+    os.getenv(
+        "PORT",
+        "8000"
+    )
+)
+
+RENDER_URL = os.environ.get(
+    "RENDER_EXTERNAL_URL"
+)
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 
-DB = sqlite3.connect("erling.db", check_same_thread=False)
+logger = logging.getLogger(__name__)
+
+
+# =========================================================
+# DATABASE
+# =========================================================
+
+DB = sqlite3.connect(
+    "erling.db",
+    check_same_thread=False
+)
+
 DB.row_factory = sqlite3.Row
+
 
 DB.execute("""
 CREATE TABLE IF NOT EXISTS settings (
@@ -33,6 +69,7 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL
 )
 """)
+
 
 DB.execute("""
 CREATE TABLE IF NOT EXISTS files (
@@ -44,35 +81,63 @@ CREATE TABLE IF NOT EXISTS files (
 )
 """)
 
+
 DB.commit()
 
 
+# =========================================================
+# DATABASE FUNCTIONS
+# =========================================================
+
 def get_setting(key):
-    row = DB.execute(
+
+    result = DB.execute(
         "SELECT value FROM settings WHERE key=?",
         (key,)
     ).fetchone()
 
-    return row["value"] if row else None
+    if result:
+        return result["value"]
+
+    return None
 
 
 def set_setting(key, value):
+
     DB.execute(
-        "INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)",
-        (key, str(value))
+        """
+        INSERT OR REPLACE INTO settings
+        (key, value)
+        VALUES (?, ?)
+        """,
+        (
+            key,
+            str(value)
+        )
     )
+
     DB.commit()
 
 
 def is_admin(user_id):
-    admin = get_setting("admin_id")
 
-    return admin is not None and int(admin) == user_id
+    admin_id = get_setting(
+        "admin_id"
+    )
+
+    if not admin_id:
+        return False
+
+    return int(admin_id) == user_id
 
 
 def generate_code():
+
     while True:
-        code = secrets.token_urlsafe(8)
+
+        code = secrets.token_urlsafe(
+            8
+        )
 
         exists = DB.execute(
             "SELECT id FROM files WHERE code=?",
@@ -83,112 +148,20 @@ def generate_code():
             return code
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# =========================================================
+# MEMBERSHIP CHECK
+# =========================================================
 
-    user = update.effective_user
-
-    if not context.args:
-
-        if get_setting("admin_id") is None:
-
-            await update.message.reply_text(
-                "سلام 👋\n\n"
-                "برای تبدیل این حساب به مدیر Erling، "
-                "دستور /claim را بفرست."
-            )
-
-            return
-
-        if is_admin(user.id):
-
-            await update.message.reply_text(
-                "🤖 Erling آماده است!\n\n"
-                "یک فایل برای من بفرست تا لینک اختصاصی آن ساخته شود.\n\n"
-                "/stats - آمار"
-            )
-
-        else:
-
-            await update.message.reply_text(
-                "سلام 👋\n"
-                "برای دریافت فایل، لینک اختصاصی آن را باز کن."
-            )
-
-        return
-
-    code = context.args[0]
-
-    file = DB.execute(
-        "SELECT * FROM files WHERE code=?",
-        (code,)
-    ).fetchone()
-
-    if not file:
-
-        await update.message.reply_text(
-            "❌ این لینک معتبر نیست یا فایل حذف شده است."
-        )
-
-        return
-
-    if not await check_membership(context, user.id):
-
-        keyboard = [
-
-            [
-                InlineKeyboardButton(
-                    "📢 عضویت در AnimeArmy",
-                    url="https://t.me/AnimeArmyChan"
-                )
-            ],
-
-            [
-                InlineKeyboardButton(
-                    "✅ بررسی عضویت",
-                    callback_data=f"check:{code}"
-                )
-            ]
-
-        ]
-
-        await update.message.reply_text(
-            "برای دریافت فایل ابتدا باید عضو کانال AnimeArmy شوی.",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-
-        return
-
-    await send_file(update.effective_chat.id, context, file)
-
-
-async def claim(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if get_setting("admin_id") is not None:
-
-        await update.message.reply_text(
-            "❌ مدیر ربات قبلاً تعیین شده است."
-        )
-
-        return
-
-    set_setting(
-        "admin_id",
-        update.effective_user.id
-    )
-
-    await update.message.reply_text(
-        "✅ این حساب مدیر Erling شد!\n\n"
-        "حالا یک فایل برای من بفرست."
-    )
-
-
-async def check_membership(context, user_id):
+async def check_membership(
+    context,
+    user_id
+):
 
     try:
 
         member = await context.bot.get_chat_member(
-            CHANNEL,
-            user_id
+            chat_id=CHANNEL,
+            user_id=user_id
         )
 
         return member.status in (
@@ -199,19 +172,234 @@ async def check_membership(context, user_id):
 
     except Exception as error:
 
-        logging.error(
-            "Membership check error: %s",
+        logger.error(
+            "Membership check failed: %s",
             error
         )
 
         return False
 
 
-async def send_file(chat_id, context, file):
+# =========================================================
+# /START
+# =========================================================
+
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    user = update.effective_user
+
+    # -----------------------------------------------------
+    # Normal /start
+    # -----------------------------------------------------
+
+    if not context.args:
+
+        if get_setting("admin_id") is None:
+
+            await update.message.reply_text(
+
+                "سلام 👋\n\n"
+
+                "به Erling خوش آمدی.\n\n"
+
+                "اگر صاحب ربات هستی، دستور زیر را بفرست:\n\n"
+
+                "/claim"
+
+            )
+
+            return
+
+
+        if is_admin(user.id):
+
+            await update.message.reply_text(
+
+                "🤖 Erling آماده است!\n\n"
+
+                "فایل موردنظر را برای من بفرست "
+                "تا لینک اختصاصی آن ساخته شود.\n\n"
+
+                "📊 /stats"
+
+            )
+
+        else:
+
+            await update.message.reply_text(
+
+                "سلام 👋\n\n"
+
+                "برای دریافت فایل، لینک اختصاصی آن "
+                "را باز کن."
+
+            )
+
+        return
+
+
+    # -----------------------------------------------------
+    # FILE LINK
+    # -----------------------------------------------------
+
+    code = context.args[0]
+
+    file = DB.execute(
+
+        """
+        SELECT *
+        FROM files
+        WHERE code=?
+        """,
+
+        (code,)
+
+    ).fetchone()
+
+
+    if not file:
+
+        await update.message.reply_text(
+
+            "❌ این لینک معتبر نیست "
+            "یا فایل پیدا نشد."
+
+        )
+
+        return
+
+
+    # -----------------------------------------------------
+    # CHECK CHANNEL
+    # -----------------------------------------------------
+
+    joined = await check_membership(
+        context,
+        user.id
+    )
+
+
+    if not joined:
+
+        keyboard = [
+
+            [
+                InlineKeyboardButton(
+
+                    "📢 عضویت در AnimeArmy",
+
+                    url="https://t.me/AnimeArmyChan"
+
+                )
+            ],
+
+            [
+                InlineKeyboardButton(
+
+                    "✅ بررسی عضویت",
+
+                    callback_data=f"check:{code}"
+
+                )
+            ]
+
+        ]
+
+
+        await update.message.reply_text(
+
+            "🔒 برای دریافت فایل ابتدا باید "
+            "عضو کانال AnimeArmy شوی.",
+
+            reply_markup=InlineKeyboardMarkup(
+                keyboard
+            )
+
+        )
+
+        return
+
+
+    # -----------------------------------------------------
+    # SEND FILE
+    # -----------------------------------------------------
+
+    await send_file(
+        update.effective_chat.id,
+        context,
+        file
+    )
+
+
+# =========================================================
+# CLAIM ADMIN
+# =========================================================
+
+async def claim(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    current_admin = get_setting(
+        "admin_id"
+    )
+
+
+    if current_admin:
+
+        if is_admin(
+            update.effective_user.id
+        ):
+
+            await update.message.reply_text(
+
+                "✅ تو قبلاً مدیر Erling هستی."
+
+            )
+
+        else:
+
+            await update.message.reply_text(
+
+                "❌ مدیر ربات قبلاً تعیین شده است."
+
+            )
+
+        return
+
+
+    set_setting(
+        "admin_id",
+        update.effective_user.id
+    )
+
+
+    await update.message.reply_text(
+
+        "✅ حساب شما با موفقیت "
+        "به‌عنوان مدیر Erling ثبت شد!\n\n"
+
+        "حالا یک فایل برای من بفرست."
+
+    )
+
+
+# =========================================================
+# SEND FILE
+# =========================================================
+
+async def send_file(
+    chat_id,
+    context,
+    file
+):
 
     try:
 
-        sent = await context.bot.copy_message(
+        sent_message = await context.bot.copy_message(
 
             chat_id=chat_id,
 
@@ -221,218 +409,478 @@ async def send_file(chat_id, context, file):
 
         )
 
+
+        # Increase downloads
+
         DB.execute(
-            "UPDATE files SET downloads=downloads+1 WHERE id=?",
+
+            """
+            UPDATE files
+            SET downloads = downloads + 1
+            WHERE id=?
+            """,
+
             (file["id"],)
+
         )
 
         DB.commit()
 
+
+        # Delete after configured seconds
+
         context.job_queue.run_once(
-            delete_file_message,
+
+            delete_message,
+
             DELETE_AFTER,
+
             data={
+
                 "chat_id": chat_id,
-                "message_id": sent.message_id
+
+                "message_id":
+                    sent_message.message_id
+
             }
+
         )
+
 
     except Exception as error:
 
-        logging.error(
-            "File delivery error: %s",
+        logger.error(
+            "Could not send file: %s",
             error
         )
 
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="❌ ارسال فایل انجام نشد."
-        )
+
+        try:
+
+            await context.bot.send_message(
+
+                chat_id=chat_id,
+
+                text="❌ هنگام ارسال فایل مشکلی رخ داد."
+
+            )
+
+        except Exception:
+
+            pass
 
 
-async def delete_file_message(context):
+# =========================================================
+# DELETE MESSAGE
+# =========================================================
+
+async def delete_message(
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     data = context.job.data
+
 
     try:
 
         await context.bot.delete_message(
+
             chat_id=data["chat_id"],
+
             message_id=data["message_id"]
+
         )
+
+        logger.info(
+            "File message deleted."
+        )
+
 
     except Exception as error:
 
-        logging.info(
-            "Message already deleted or unavailable: %s",
+        logger.info(
+            "Could not delete message: %s",
             error
         )
 
 
-async def membership_check(update, context):
+# =========================================================
+# CHECK MEMBERSHIP BUTTON
+# =========================================================
+
+async def membership_check(
+    update,
+    context
+):
 
     query = update.callback_query
 
     await query.answer()
 
-    code = query.data.split(":", 1)[1]
+
+    code = query.data.split(
+        ":",
+        1
+    )[1]
+
 
     file = DB.execute(
-        "SELECT * FROM files WHERE code=?",
+
+        """
+        SELECT *
+        FROM files
+        WHERE code=?
+        """,
+
         (code,)
+
     ).fetchone()
+
 
     if not file:
 
         await query.edit_message_text(
+
             "❌ فایل پیدا نشد."
+
         )
 
         return
 
-    if not await check_membership(
+
+    joined = await check_membership(
+
         context,
+
         query.from_user.id
-    ):
 
-        await query.answer(
-            "❌ هنوز عضو کانال نیستی.",
-            show_alert=True
-        )
-
-        return
-
-    await query.message.delete()
-
-    await send_file(
-        query.message.chat_id,
-        context,
-        file
     )
 
 
-async def receive_file(update, context):
+    if not joined:
+
+        await query.answer(
+
+            "❌ هنوز عضو کانال نیستی.",
+
+            show_alert=True
+
+        )
+
+        return
+
+
+    try:
+
+        await query.message.delete()
+
+    except Exception:
+
+        pass
+
+
+    await send_file(
+
+        query.message.chat_id,
+
+        context,
+
+        file
+
+    )
+
+
+# =========================================================
+# RECEIVE FILE
+# =========================================================
+
+async def receive_file(
+    update,
+    context
+):
 
     user = update.effective_user
+
 
     if not is_admin(user.id):
 
         await update.message.reply_text(
-            "❌ فقط مدیر می‌تواند فایل آپلود کند."
+
+            "❌ فقط مدیر می‌تواند "
+            "فایل آپلود کند."
+
         )
 
         return
 
+
     message = update.message
+
+
+    # Generate unique ID
 
     code = generate_code()
 
+
+    # Save Telegram message information
+
     DB.execute(
+
         """
         INSERT INTO files
         (code, chat_id, message_id)
         VALUES (?, ?, ?)
         """,
+
         (
+
             code,
+
             message.chat_id,
+
             message.message_id
+
         )
+
     )
+
 
     DB.commit()
 
+
     bot = await context.bot.get_me()
 
+
     link = (
-        f"https://t.me/{bot.username}?start={code}"
+
+        f"https://t.me/"
+        f"{bot.username}"
+        f"?start={code}"
+
     )
+
 
     await message.reply_text(
-        "✅ فایل ثبت شد!\n\n"
-        f"🔗 لینک دریافت:\n{link}\n\n"
-        f"⏱ فایل بعد از {DELETE_AFTER} ثانیه حذف می‌شود."
+
+        "✅ فایل با موفقیت ثبت شد!\n\n"
+
+        "🔗 لینک دریافت:\n"
+
+        f"{link}\n\n"
+
+        f"⏱ فایل دریافتی کاربر "
+        f"بعد از {DELETE_AFTER} ثانیه "
+        f"حذف می‌شود."
+
     )
 
 
-async def stats(update, context):
+# =========================================================
+# STATS
+# =========================================================
 
-    if not is_admin(update.effective_user.id):
+async def stats(
+    update,
+    context
+):
+
+    if not is_admin(
+        update.effective_user.id
+    ):
+
         return
 
+
     result = DB.execute(
+
         """
         SELECT
-        COUNT(*) AS files,
-        COALESCE(SUM(downloads), 0) AS downloads
+
+            COUNT(*) AS files,
+
+            COALESCE(
+                SUM(downloads),
+                0
+            ) AS downloads
+
         FROM files
+
         """
     ).fetchone()
 
+
     await update.message.reply_text(
+
         "📊 آمار Erling\n\n"
-        f"📁 فایل‌ها: {result['files']}\n"
-        f"📥 دریافت‌ها: {result['downloads']}"
+
+        f"📁 تعداد فایل‌ها: "
+        f"{result['files']}\n\n"
+
+        f"📥 تعداد دریافت‌ها: "
+        f"{result['downloads']}"
+
     )
 
 
-async def post_init(application):
+# =========================================================
+# BOT APPLICATION
+# =========================================================
 
-    webhook_url = os.environ["WEBHOOK_URL"]
+async def post_init(
+    application
+):
+
+    if not RENDER_URL:
+
+        logger.error(
+            "RENDER_EXTERNAL_URL is missing!"
+        )
+
+        return
+
+
+    webhook_url = (
+
+        f"{RENDER_URL}"
+        f"/telegram"
+
+    )
+
 
     await application.bot.set_webhook(
+
         url=webhook_url
+
     )
 
-    logging.info(
-        "Webhook configured: %s",
+
+    logger.info(
+
+        "Telegram webhook configured: %s",
+
         webhook_url
+
     )
 
 
 application = (
+
     Application.builder()
+
     .token(TOKEN)
+
     .post_init(post_init)
+
     .build()
+
 )
 
 
-application.add_handler(
-    CommandHandler("start", start)
-)
+# =========================================================
+# HANDLERS
+# =========================================================
 
 application.add_handler(
-    CommandHandler("claim", claim)
-)
 
-application.add_handler(
-    CommandHandler("stats", stats)
-)
-
-application.add_handler(
-    CallbackQueryHandler(
-        membership_check,
-        pattern=r"^check:"
+    CommandHandler(
+        "start",
+        start
     )
+
 )
 
+
 application.add_handler(
+
+    CommandHandler(
+        "claim",
+        claim
+    )
+
+)
+
+
+application.add_handler(
+
+    CommandHandler(
+        "stats",
+        stats
+    )
+
+)
+
+
+application.add_handler(
+
+    CallbackQueryHandler(
+
+        membership_check,
+
+        pattern=r"^check:"
+
+    )
+
+)
+
+
+application.add_handler(
+
     MessageHandler(
+
         filters.Document.ALL
         | filters.VIDEO
         | filters.AUDIO
         | filters.PHOTO,
+
         receive_file
+
     )
+
 )
 
 
+# =========================================================
+# START SERVER
+# =========================================================
+
 if __name__ == "__main__":
 
+    if not RENDER_URL:
+
+        raise RuntimeError(
+
+            "RENDER_EXTERNAL_URL is not available. "
+            "Make sure this is running as a Render Web Service."
+
+        )
+
+
+    webhook_url = (
+
+        f"{RENDER_URL}"
+        f"/telegram"
+
+    )
+
+
+    logger.info(
+        "Starting Erling..."
+    )
+
+    logger.info(
+        "Webhook URL: %s",
+        webhook_url
+    )
+
+
     application.run_webhook(
+
         listen="0.0.0.0",
+
         port=PORT,
+
         url_path="telegram",
-        webhook_url=os.environ["WEBHOOK_URL"]
+
+        webhook_url=webhook_url
+
     )
