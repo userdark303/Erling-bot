@@ -2,8 +2,9 @@ import os
 import sqlite3
 import secrets
 import logging
-from flask import Flask, request
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ChatMemberStatus
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -13,76 +14,67 @@ from telegram.ext import (
     filters,
 )
 
-# =========================
-# Settings
-# =========================
-
 TOKEN = os.environ["BOT_TOKEN"]
 CHANNEL = os.getenv("CHANNEL_USERNAME", "@AnimeArmyChan")
 DELETE_AFTER = int(os.getenv("DELETE_AFTER_SECONDS", "20"))
 PORT = int(os.getenv("PORT", "8000"))
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
 
-# =========================
-# Database
-# =========================
+DB = sqlite3.connect("erling.db", check_same_thread=False)
+DB.row_factory = sqlite3.Row
 
-db = sqlite3.connect("erling.db", check_same_thread=False)
-
-db.execute("""
+DB.execute("""
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
-    value TEXT
+    value TEXT NOT NULL
 )
 """)
 
-db.execute("""
+DB.execute("""
 CREATE TABLE IF NOT EXISTS files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    code TEXT UNIQUE,
-    chat_id INTEGER,
-    message_id INTEGER,
+    code TEXT UNIQUE NOT NULL,
+    chat_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
     downloads INTEGER DEFAULT 0
 )
 """)
 
-db.commit()
+DB.commit()
 
 
 def get_setting(key):
-    result = db.execute(
+    row = DB.execute(
         "SELECT value FROM settings WHERE key=?",
         (key,)
     ).fetchone()
 
-    return result[0] if result else None
+    return row["value"] if row else None
 
 
 def set_setting(key, value):
-    db.execute(
+    DB.execute(
         "INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)",
         (key, str(value))
     )
-    db.commit()
+    DB.commit()
 
 
 def is_admin(user_id):
     admin = get_setting("admin_id")
 
-    if not admin:
-        return False
-
-    return int(admin) == user_id
+    return admin is not None and int(admin) == user_id
 
 
 def generate_code():
-
     while True:
-
         code = secrets.token_urlsafe(8)
 
-        exists = db.execute(
+        exists = DB.execute(
             "SELECT id FROM files WHERE code=?",
             (code,)
         ).fetchone()
@@ -91,22 +83,10 @@ def generate_code():
             return code
 
 
-# =========================
-# Telegram Application
-# =========================
-
-application = Application.builder().token(TOKEN).build()
-
-
-# =========================
-# Start
-# =========================
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.effective_user
 
-    # First start
     if not context.args:
 
         if get_setting("admin_id") is None:
@@ -122,7 +102,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if is_admin(user.id):
 
             await update.message.reply_text(
-                "🤖 Erling آماده است.\n\n"
+                "🤖 Erling آماده است!\n\n"
                 "یک فایل برای من بفرست تا لینک اختصاصی آن ساخته شود.\n\n"
                 "/stats - آمار"
             )
@@ -136,13 +116,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-    # =========================
-    # File link
-    # =========================
-
     code = context.args[0]
 
-    file = db.execute(
+    file = DB.execute(
         "SELECT * FROM files WHERE code=?",
         (code,)
     ).fetchone()
@@ -169,7 +145,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [
                 InlineKeyboardButton(
                     "✅ بررسی عضویت",
-                    callback_data=f"check_{code}"
+                    callback_data=f"check:{code}"
                 )
             ]
 
@@ -182,12 +158,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-    await send_file(update, context, file)
+    await send_file(update.effective_chat.id, context, file)
 
-
-# =========================
-# Claim Admin
-# =========================
 
 async def claim(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -205,14 +177,10 @@ async def claim(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await update.message.reply_text(
-        "✅ این حساب با موفقیت مدیر Erling شد.\n\n"
+        "✅ این حساب مدیر Erling شد!\n\n"
         "حالا یک فایل برای من بفرست."
     )
 
-
-# =========================
-# Membership
-# =========================
 
 async def check_membership(context, user_id):
 
@@ -223,26 +191,23 @@ async def check_membership(context, user_id):
             user_id
         )
 
-        return member.status in [
-            "member",
-            "administrator",
-            "creator"
-        ]
+        return member.status in (
+            ChatMemberStatus.MEMBER,
+            ChatMemberStatus.ADMINISTRATOR,
+            ChatMemberStatus.OWNER
+        )
 
     except Exception as error:
 
-        logging.error(error)
+        logging.error(
+            "Membership check error: %s",
+            error
+        )
 
         return False
 
 
-# =========================
-# File delivery
-# =========================
-
-async def send_file(update, context, file):
-
-    chat_id = update.effective_chat.id
+async def send_file(chat_id, context, file):
 
     try:
 
@@ -250,37 +215,34 @@ async def send_file(update, context, file):
 
             chat_id=chat_id,
 
-            from_chat_id=file[2],
+            from_chat_id=file["chat_id"],
 
-            message_id=file[3]
+            message_id=file["message_id"]
 
         )
 
-        db.execute(
+        DB.execute(
             "UPDATE files SET downloads=downloads+1 WHERE id=?",
-            (file[0],)
+            (file["id"],)
         )
 
-        db.commit()
-
-        # Delete after 20 seconds
+        DB.commit()
 
         context.job_queue.run_once(
-
-            delete_message,
-
+            delete_file_message,
             DELETE_AFTER,
-
             data={
                 "chat_id": chat_id,
                 "message_id": sent.message_id
             }
-
         )
 
     except Exception as error:
 
-        logging.error(error)
+        logging.error(
+            "File delivery error: %s",
+            error
+        )
 
         await context.bot.send_message(
             chat_id=chat_id,
@@ -288,41 +250,34 @@ async def send_file(update, context, file):
         )
 
 
-async def delete_message(context):
+async def delete_file_message(context):
 
     data = context.job.data
 
     try:
 
         await context.bot.delete_message(
-
             chat_id=data["chat_id"],
-
             message_id=data["message_id"]
-
         )
 
     except Exception as error:
 
-        logging.error(error)
+        logging.info(
+            "Message already deleted or unavailable: %s",
+            error
+        )
 
 
-# =========================
-# Membership button
-# =========================
-
-async def membership_button(update, context):
+async def membership_check(update, context):
 
     query = update.callback_query
 
     await query.answer()
 
-    code = query.data.replace(
-        "check_",
-        ""
-    )
+    code = query.data.split(":", 1)[1]
 
-    file = db.execute(
+    file = DB.execute(
         "SELECT * FROM files WHERE code=?",
         (code,)
     ).fetchone()
@@ -350,15 +305,11 @@ async def membership_button(update, context):
     await query.message.delete()
 
     await send_file(
-        update,
+        query.message.chat_id,
         context,
         file
     )
 
-
-# =========================
-# Receive files
-# =========================
 
 async def receive_file(update, context):
 
@@ -376,104 +327,76 @@ async def receive_file(update, context):
 
     code = generate_code()
 
-    db.execute(
-
+    DB.execute(
         """
         INSERT INTO files
         (code, chat_id, message_id)
         VALUES (?, ?, ?)
         """,
-
         (
             code,
             message.chat_id,
             message.message_id
         )
-
     )
 
-    db.commit()
+    DB.commit()
 
     bot = await context.bot.get_me()
 
     link = (
-        f"https://t.me/{bot.username}"
-        f"?start={code}"
+        f"https://t.me/{bot.username}?start={code}"
     )
 
     await message.reply_text(
-
         "✅ فایل ثبت شد!\n\n"
-
-        "🔗 لینک دریافت:\n"
-        f"{link}\n\n"
-
-        "⏱ فایل برای کاربر بعد از "
-        f"{DELETE_AFTER} ثانیه حذف می‌شود."
+        f"🔗 لینک دریافت:\n{link}\n\n"
+        f"⏱ فایل بعد از {DELETE_AFTER} ثانیه حذف می‌شود."
     )
 
-
-# =========================
-# Statistics
-# =========================
 
 async def stats(update, context):
 
     if not is_admin(update.effective_user.id):
-
         return
 
-    result = db.execute(
-
+    result = DB.execute(
         """
         SELECT
-        COUNT(*),
-        COALESCE(SUM(downloads),0)
+        COUNT(*) AS files,
+        COALESCE(SUM(downloads), 0) AS downloads
         FROM files
         """
-
     ).fetchone()
 
     await update.message.reply_text(
-
         "📊 آمار Erling\n\n"
-
-        f"📁 تعداد فایل‌ها: {result[0]}\n"
-        f"📥 تعداد دریافت‌ها: {result[1]}"
+        f"📁 فایل‌ها: {result['files']}\n"
+        f"📥 دریافت‌ها: {result['downloads']}"
     )
 
 
-# =========================
-# Flask Webhook
-# =========================
+async def post_init(application):
 
-web = Flask(__name__)
+    webhook_url = os.environ["WEBHOOK_URL"]
 
-
-@web.route("/", methods=["GET"])
-def home():
-
-    return "Erling is running."
-
-
-@web.route("/webhook", methods=["POST"])
-async def webhook():
-
-    data = request.get_json(force=True)
-
-    update = Update.de_json(
-        data,
-        application.bot
+    await application.bot.set_webhook(
+        url=webhook_url
     )
 
-    await application.process_update(update)
+    logging.info(
+        "Webhook configured: %s",
+        webhook_url
+    )
 
-    return "OK"
 
+application = (
+    Application.builder()
+    .token(TOKEN)
+    .post_init(post_init)
+    .build()
+)
 
-# =========================
-# Handlers
-# =========================
 
 application.add_handler(
     CommandHandler("start", start)
@@ -488,54 +411,28 @@ application.add_handler(
 )
 
 application.add_handler(
-
     CallbackQueryHandler(
-        membership_button,
-        pattern=r"^check_"
+        membership_check,
+        pattern=r"^check:"
     )
-
 )
 
 application.add_handler(
-
     MessageHandler(
-
         filters.Document.ALL
         | filters.VIDEO
         | filters.AUDIO
         | filters.PHOTO,
-
         receive_file
-
     )
-
 )
 
 
-# =========================
-# Run
-# =========================
-
 if __name__ == "__main__":
 
-    import asyncio
-    import threading
-    import uvicorn
-
-    async def run_bot():
-
-        await application.initialize()
-
-        await application.start()
-
-        await application.bot.set_webhook(
-            os.environ["WEBHOOK_URL"]
-        )
-
-    asyncio.run(run_bot())
-
-    uvicorn.run(
-        web,
-        host="0.0.0.0",
-        port=PORT
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path="telegram",
+        webhook_url=os.environ["WEBHOOK_URL"]
     )
