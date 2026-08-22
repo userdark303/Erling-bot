@@ -14,6 +14,7 @@ from telegram.ext import (
     filters,
 )
 
+
 # =========================================================
 # SETTINGS
 # =========================================================
@@ -42,6 +43,11 @@ PORT = int(
 RENDER_URL = os.environ.get(
     "RENDER_EXTERNAL_URL"
 )
+
+
+# =========================================================
+# LOGGING
+# =========================================================
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -121,9 +127,7 @@ def set_setting(key, value):
 
 def is_admin(user_id):
 
-    admin_id = get_setting(
-        "admin_id"
-    )
+    admin_id = get_setting("admin_id")
 
     if not admin_id:
         return False
@@ -135,21 +139,19 @@ def generate_code():
 
     while True:
 
-        code = secrets.token_urlsafe(
-            8
-        )
+        code = secrets.token_urlsafe(8)
 
-        exists = DB.execute(
+        result = DB.execute(
             "SELECT id FROM files WHERE code=?",
             (code,)
         ).fetchone()
 
-        if not exists:
+        if not result:
             return code
 
 
 # =========================================================
-# MEMBERSHIP CHECK
+# CHANNEL MEMBERSHIP
 # =========================================================
 
 async def check_membership(
@@ -202,11 +204,8 @@ async def start(
             await update.message.reply_text(
 
                 "سلام 👋\n\n"
-
-                "به Erling خوش آمدی.\n\n"
-
+                "به ربات Erling خوش آمدی.\n\n"
                 "اگر صاحب ربات هستی، دستور زیر را بفرست:\n\n"
-
                 "/claim"
 
             )
@@ -219,10 +218,8 @@ async def start(
             await update.message.reply_text(
 
                 "🤖 Erling آماده است!\n\n"
-
                 "فایل موردنظر را برای من بفرست "
                 "تا لینک اختصاصی آن ساخته شود.\n\n"
-
                 "📊 /stats"
 
             )
@@ -232,7 +229,6 @@ async def start(
             await update.message.reply_text(
 
                 "سلام 👋\n\n"
-
                 "برای دریافت فایل، لینک اختصاصی آن "
                 "را باز کن."
 
@@ -248,15 +244,12 @@ async def start(
     code = context.args[0]
 
     file = DB.execute(
-
         """
         SELECT *
         FROM files
         WHERE code=?
         """,
-
         (code,)
-
     ).fetchone()
 
 
@@ -288,21 +281,15 @@ async def start(
 
             [
                 InlineKeyboardButton(
-
                     "📢 عضویت در AnimeArmy",
-
                     url="https://t.me/AnimeArmyChan"
-
                 )
             ],
 
             [
                 InlineKeyboardButton(
-
                     "✅ بررسی عضویت",
-
                     callback_data=f"check:{code}"
-
                 )
             ]
 
@@ -335,7 +322,7 @@ async def start(
 
 
 # =========================================================
-# CLAIM ADMIN
+# /CLAIM
 # =========================================================
 
 async def claim(
@@ -355,17 +342,13 @@ async def claim(
         ):
 
             await update.message.reply_text(
-
                 "✅ تو قبلاً مدیر Erling هستی."
-
             )
 
         else:
 
             await update.message.reply_text(
-
                 "❌ مدیر ربات قبلاً تعیین شده است."
-
             )
 
         return
@@ -381,7 +364,6 @@ async def claim(
 
         "✅ حساب شما با موفقیت "
         "به‌عنوان مدیر Erling ثبت شد!\n\n"
-
         "حالا یک فایل برای من بفرست."
 
     )
@@ -410,7 +392,7 @@ async def send_file(
         )
 
 
-        # Increase downloads
+        # Increase download counter
 
         DB.execute(
 
@@ -427,7 +409,7 @@ async def send_file(
         DB.commit()
 
 
-        # Delete after configured seconds
+        # Delete after X seconds
 
         context.job_queue.run_once(
 
@@ -436,12 +418,8 @@ async def send_file(
             DELETE_AFTER,
 
             data={
-
                 "chat_id": chat_id,
-
-                "message_id":
-                    sent_message.message_id
-
+                "message_id": sent_message.message_id
             }
 
         )
@@ -505,7 +483,7 @@ async def delete_message(
 
 
 # =========================================================
-# CHECK MEMBERSHIP BUTTON
+# MEMBERSHIP BUTTON
 # =========================================================
 
 async def membership_check(
@@ -540,9 +518,7 @@ async def membership_check(
     if not file:
 
         await query.edit_message_text(
-
             "❌ فایل پیدا نشد."
-
         )
 
         return
@@ -617,7 +593,7 @@ async def receive_file(
     message = update.message
 
 
-    # Generate unique ID
+    # Create unique file code
 
     code = generate_code()
 
@@ -633,13 +609,9 @@ async def receive_file(
         """,
 
         (
-
             code,
-
             message.chat_id,
-
             message.message_id
-
         )
 
     )
@@ -665,18 +637,16 @@ async def receive_file(
         "✅ فایل با موفقیت ثبت شد!\n\n"
 
         "🔗 لینک دریافت:\n"
-
         f"{link}\n\n"
 
-        f"⏱ فایل دریافتی کاربر "
-        f"بعد از {DELETE_AFTER} ثانیه "
-        f"حذف می‌شود."
+        f"⏱ فایل برای کاربر بعد از "
+        f"{DELETE_AFTER} ثانیه حذف می‌شود."
 
     )
 
 
 # =========================================================
-# STATS
+# /STATS
 # =========================================================
 
 async def stats(
@@ -695,16 +665,9 @@ async def stats(
 
         """
         SELECT
-
             COUNT(*) AS files,
-
-            COALESCE(
-                SUM(downloads),
-                0
-            ) AS downloads
-
+            COALESCE(SUM(downloads), 0) AS downloads
         FROM files
-
         """
     ).fetchone()
 
@@ -723,53 +686,14 @@ async def stats(
 
 
 # =========================================================
-# BOT APPLICATION
+# APPLICATION
 # =========================================================
-
-async def post_init(
-    application
-):
-
-    if not RENDER_URL:
-
-        logger.error(
-            "RENDER_EXTERNAL_URL is missing!"
-        )
-
-        return
-
-
-    webhook_url = (
-
-        f"{RENDER_URL}"
-        f"/telegram"
-
-    )
-
-
-    await application.bot.set_webhook(
-
-        url=webhook_url
-
-    )
-
-
-    logger.info(
-
-        "Telegram webhook configured: %s",
-
-        webhook_url
-
-    )
-
 
 application = (
 
     Application.builder()
 
     .token(TOKEN)
-
-    .post_init(post_init)
 
     .build()
 
@@ -840,7 +764,7 @@ application.add_handler(
 
 
 # =========================================================
-# START SERVER
+# START
 # =========================================================
 
 if __name__ == "__main__":
